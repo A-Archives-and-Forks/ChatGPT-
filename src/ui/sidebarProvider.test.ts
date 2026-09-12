@@ -13,7 +13,7 @@ import { ConversationStore } from "../stores/conversationStore";
 import { runAgent } from "../agent/loop";
 import { generateTitle } from "../agent/provider";
 import { recordUsage } from "../stores/usageStore";
-import { DEFAULT_APPROVAL } from "../agent/approvalPolicy";
+import { DEFAULT_APPROVAL, type ApprovalPolicy } from "../agent/approvalPolicy";
 import { MODEL_CATALOG, type ModelDef } from "../stores/featureStore";
 
 vi.mock("vscode", () => ({ window: { showWarningMessage: vi.fn(), showErrorMessage: vi.fn(), state: { focused: true } } }));
@@ -42,11 +42,11 @@ function memento() {
     },
   };
 }
-async function fixture() {
+async function fixture(approvalPolicy: ApprovalPolicy = structuredClone(DEFAULT_APPROVAL)) {
   const context = { globalState: memento(), workspaceState: memento() };
   const store = new ConversationStore(context as any);
   const a = await store.create(), b = await store.create();
-  const features = { providers: [{ id: "api", kind: "anthropic", enabled: true, baseUrl: "https://api.example.test" }], llamacppModels: [], autoGenerateTitles: false, hooks: [], subagents: [], approvalPolicy: { ...DEFAULT_APPROVAL, shell: { mode: "ask", allowlist: [], denylist: [] } }, maxAgentSteps: 10 };
+  const features = { providers: [{ id: "api", kind: "anthropic", enabled: true, baseUrl: "https://api.example.test" }], llamacppModels: [], autoGenerateTitles: false, hooks: [], subagents: [], approvalPolicy, maxAgentSteps: 10 };
   const host = new SidebarProvider(context as any, { getSettings: () => ({ model: "api::model", maxResponseLength: 0 }), getProviderKey: async () => "test-key" } as any, { get: () => features, allModels: () => [], optionsFor: () => [] } as any) as any;
   host._activeId = b.id;
   host._view = { webview: { postMessage: vi.fn() } };
@@ -66,6 +66,46 @@ function session() {
 beforeEach(() => {
   vi.clearAllMocks();
   MODEL_CATALOG.length = 0;
+});
+
+describe("production sidebar saved Allow policy", () => {
+  const variableCommand = [
+    "cd /project &&",
+    'FILE="src/example.ts"; sed -n 1,10p "$FILE"; echo ---; sed -n 20,30p "$FILE"',
+  ].join("\n");
+
+  function savedAllowPolicy(): ApprovalPolicy {
+    const policy = structuredClone(DEFAULT_APPROVAL);
+    for (const rule of Object.values(policy)) rule.mode = "allow";
+    policy.shell.denylist = ["git push", "git reset --hard", "npm publish", "rm -rf"];
+    return policy;
+  }
+
+  it("runs variable-based shell commands without a card when Allow and unrelated deny rules were saved before the run", async () => {
+    const { host, a } = await fixture(savedAllowPolicy());
+    const s = session();
+    host._sessions.set(a.id, s);
+    const approval = host._approveTool(a.id, s, "Shell", { command: variableCommand }, "shell-allow");
+    try {
+      expect(s.pendingApprovals.size).toBe(0);
+      expect(host._view.webview.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "approvalRequest" }));
+      expect(await approval).toBe(true);
+    } finally {
+      s.abort.abort();
+    }
+  });
+
+  it("still blocks an explicitly denied chained command under the saved Allow policy", async () => {
+    const { host, a } = await fixture(savedAllowPolicy());
+    const s = session();
+    host._sessions.set(a.id, s);
+    expect(await host._approveTool(a.id, s, "Shell", { command: `${variableCommand}; git push origin main` }, "shell-deny")).toEqual({
+      approved: false,
+      blockedSubject: "git push origin main",
+    });
+    expect(s.pendingApprovals.size).toBe(0);
+    expect(host._view.webview.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "approvalRequest" }));
+  });
 });
 
 describe("production sidebar session lifecycle", () => {

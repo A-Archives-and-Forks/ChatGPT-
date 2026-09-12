@@ -340,9 +340,10 @@ export function evaluateApproval(policy: ApprovalPolicy, toolName: string, input
 			if (d === "ask") decision = "ask";
 		}
 		// Literal prefix rules cannot reliably authorize expanded shell programs.
-		// An unrestricted allow policy remains unrestricted; patterned/review
-		// policies require confirmation when expansion prevents static evaluation.
-		if (type === "shell" && shellSubstitutions(String(input?.command ?? "")).dynamic && (r.mode !== "allow" || r.denylist?.length)) {
+		// Ask/review/deny stay conservative when expansion prevents evaluation.
+		// Allow stays silent after the explicit deny checks above; unrelated deny
+		// rules must not turn ordinary variable references into approval prompts.
+		if (type === "shell" && r.mode !== "allow" && shellSubstitutions(String(input?.command ?? "")).dynamic) {
 			if (r.mode === "deny") return "deny";
 			decision = "ask";
 		}
