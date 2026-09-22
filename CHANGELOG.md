@@ -4,6 +4,12 @@ All notable changes to the "ocursor" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.1.5] - 2026-09-12
+
+### Fixed
+
+- Terminal Commands set to Allow no longer prompts for approval on variables, substitutions, or shell scripts solely because unrelated deny-list rules exist; matching deny rules still block commands
+
 ## [0.1.4] - 2026-09-11
 
 ### Added
